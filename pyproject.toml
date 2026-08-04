@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "realtime-dsp"
+version = "0.1.0"
+description = "Sistema DSP modular de audio en tiempo real"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.24", "sounddevice>=0.4.6"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
