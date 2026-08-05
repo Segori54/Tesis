@@ -10,17 +10,41 @@ python -m pip install -r requirements.txt
 
 ## Uso
 
-Passthrough con ASIO, pensado para medir la latencia de la interfaz:
+Passthrough, pensado para medir la latencia de la interfaz:
 
 ```bash
 python main.py --processor passthrough --samplerate 48000 --blocksize 256 --channels 1
 ```
 
-El motor selecciona automáticamente el primer dispositivo full-duplex del host API `ASIO` y usa `AsioSettings`. Se puede elegir otro dispositivo explícitamente:
+El passthrough no fija ningún host API. Si se especifica uno, el motor selecciona separadamente un dispositivo de entrada y uno de salida dentro del mismo Host API. Prioriza nombres que contengan `Focusrite`; si no encuentra ninguno, utiliza los dispositivos por defecto del Host API. También se puede elegir un dispositivo explícitamente:
 
 ```bash
-python main.py --processor passthrough --device "Nombre del dispositivo ASIO"
+python main.py --processor passthrough --hostapi ASIO --device "Nombre del dispositivo ASIO"
 python main.py --list-devices
+```
+
+Para imprimir los dispositivos seleccionados, sus índices, samplerates y capacidades sin abrir el stream:
+
+```bash
+python main.py --inspect-devices --hostapi WASAPI
+```
+
+Para imprimir los argumentos exactos que se entregarían a `sounddevice.Stream()` y terminar sin abrirlo:
+
+```bash
+python main.py --inspect-stream --hostapi "Windows WASAPI"
+```
+
+Para probar únicamente la apertura y cierre de un duplex de dos canales, sin callback ni ajustes adicionales:
+
+```bash
+python main.py --minimal-duplex --hostapi "Windows WASAPI"
+```
+
+Para inspeccionar PortAudio sin abrir ningún stream:
+
+```bash
+python main.py --inspect-portaudio
 ```
 
 Para usar otro backend de PortAudio, por ejemplo WASAPI:
@@ -29,7 +53,7 @@ Para usar otro backend de PortAudio, por ejemplo WASAPI:
 python main.py --processor passthrough --hostapi WASAPI
 ```
 
-La instalación de `sounddevice` debe utilizar una biblioteca PortAudio compilada con soporte ASIO; de lo contrario `--hostapi ASIO` informará que no está disponible.
+La instalación de `sounddevice` debe utilizar una biblioteca PortAudio compilada con soporte ASIO para poder usar `--hostapi ASIO`.
 
 Cancelador adaptativo NLMS:
 
@@ -42,7 +66,7 @@ El dispositivo puede seleccionarse con `--device`; se acepta el índice o el nom
 ## Arquitectura
 
 - `RealtimeAudioEngine`: captura y reproducción mediante un único callback full-duplex.
-- Selección explícita de host API y dispositivo, con ASIO como valor predeterminado de la CLI para baja latencia.
+- Selección explícita y externa de host API y dispositivo; si no se indica, se utiliza el dispositivo predeterminado de PortAudio.
 - `PassthroughProcessor`: copia entrada a salida para la prueba inicial de latencia.
 - `NLSMProcessor`: cancelador adaptativo por canal con referencia de la señal enviada al altavoz.
 - `Processor`: contrato común `Process(block) -> block`.

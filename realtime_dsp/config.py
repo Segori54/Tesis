@@ -1,7 +1,7 @@
 """Configuración del sistema de audio."""
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from typing import Optional, Tuple, Union
 
 
 @dataclass(frozen=True)
@@ -13,7 +13,7 @@ class AudioConfig:
     channels: int = 1
     dtype: str = "float32"
     latency: Union[str, float] = "low"
-    device: Optional[Union[int, str]] = None
+    device: Optional[Union[int, str, Tuple[Union[int, str], Union[int, str]]]] = None
     hostapi: Optional[str] = None
 
     def __post_init__(self) -> None:

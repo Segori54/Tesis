@@ -48,9 +48,17 @@ class RealtimeAudioEngine:
         self.callback_count += 1
 
     def _resolve_device(self, sd):
-        """Resuelve un dispositivo compatible con el host API solicitado."""
+        """Devuelve ``(dispositivo_entrada, dispositivo_salida)``.
+
+        En Windows es habitual que una interfaz tenga dispositivos separados
+        para entrada y salida. Por eso no se busca un único dispositivo
+        full-duplex: se selecciona uno de entrada y otro de salida dentro del
+        mismo Host API.
+        """
         if not self.config.hostapi:
-            return self.config.device
+            if isinstance(self.config.device, tuple):
+                return self.config.device
+            return (self.config.device, self.config.device)
 
         requested = self.config.hostapi.casefold()
         hostapis = sd.query_hostapis()
@@ -64,51 +72,89 @@ class RealtimeAudioEngine:
                 f"Host API '{self.config.hostapi}' no disponible. Disponibles: {available}"
             )
 
-        hostapi_index = hostapis.index(matching_hostapis[0])
-        candidates = []
-        for device_index in matching_hostapis[0]["devices"]:
-            device = sd.query_devices(device_index)
-            if (
-                device["hostapi"] == hostapi_index
-                and device["max_input_channels"] >= self.config.channels
-                and device["max_output_channels"] >= self.config.channels
-            ):
-                candidates.append(device_index)
+        hostapi_index = next(
+            index for index, hostapi in enumerate(hostapis)
+            if hostapi is matching_hostapis[0]
+        )
+
+        def device_info(device_id):
+            info = sd.query_devices(device_id)
+            if info["hostapi"] != hostapi_index:
+                raise RuntimeError(
+                    f"El dispositivo {device_id!r} no pertenece a {self.config.hostapi}"
+                )
+            return info
 
         if self.config.device is not None:
-            selected = self.config.device
-            selected_info = sd.query_devices(selected)
-            if selected_info["hostapi"] != hostapi_index:
-                raise RuntimeError(
-                    f"El dispositivo {selected!r} no pertenece a {self.config.hostapi}"
-                )
-            return selected
-        if not candidates:
+            if isinstance(self.config.device, tuple):
+                if len(self.config.device) != 2:
+                    raise ValueError("device debe ser (input_device, output_device)")
+                input_device, output_device = self.config.device
+            else:
+                input_device = output_device = self.config.device
+            input_info = device_info(input_device)
+            output_info = device_info(output_device)
+            if input_info["max_input_channels"] < self.config.channels:
+                raise RuntimeError(f"El dispositivo de entrada {input_device!r} no tiene suficientes canales")
+            if output_info["max_output_channels"] < self.config.channels:
+                raise RuntimeError(f"El dispositivo de salida {output_device!r} no tiene suficientes canales")
+            return input_device, output_device
+
+        input_candidates = []
+        output_candidates = []
+        for device_index in matching_hostapis[0]["devices"]:
+            info = sd.query_devices(device_index)
+            if info["hostapi"] != hostapi_index:
+                continue
+            name = info["name"].casefold()
+            if info["max_input_channels"] >= self.config.channels:
+                input_candidates.append((device_index, "focusrite" in name))
+            if info["max_output_channels"] >= self.config.channels:
+                output_candidates.append((device_index, "focusrite" in name))
+
+        if not input_candidates or not output_candidates:
             raise RuntimeError(
-                f"No hay un dispositivo {self.config.hostapi} con "
-                f"{self.config.channels} canal(es) de entrada y salida"
+                f"No hay dispositivos de entrada y salida suficientes en {self.config.hostapi}"
             )
-        return candidates[0]
+
+        default_input = matching_hostapis[0].get("default_input_device")
+        default_output = matching_hostapis[0].get("default_output_device")
+
+        focusrite_input = next((device for device, preferred in input_candidates if preferred), None)
+        focusrite_output = next((device for device, preferred in output_candidates if preferred), None)
+        input_device = focusrite_input if focusrite_input is not None else default_input
+        output_device = focusrite_output if focusrite_output is not None else default_output
+
+        # Algunos drivers no informan defaults válidos para su Host API.
+        if input_device not in {device for device, _ in input_candidates}:
+            input_device = input_candidates[0][0]
+        if output_device not in {device for device, _ in output_candidates}:
+            output_device = output_candidates[0][0]
+        return input_device, output_device
 
     def _extra_settings(self, sd):
         if self.config.hostapi and self.config.hostapi.casefold() == "asio":
             return sd.AsioSettings()
         return None
 
+    def stream_arguments(self, sd):
+        """Construye los argumentos efectivos que recibiría ``sd.Stream``."""
+        return {
+            "samplerate": self.config.samplerate,
+            "blocksize": self.config.blocksize,
+            "device": self._resolve_device(sd),
+            "channels": self.config.channels,
+            "dtype": self.config.dtype,
+            "latency": self.config.latency,
+            "extra_settings": self._extra_settings(sd),
+            "callback": self._callback,
+        }
+
     def start(self) -> None:
         import sounddevice as sd
 
         self._stop_event.clear()
-        self._stream = sd.Stream(
-            samplerate=self.config.samplerate,
-            blocksize=self.config.blocksize,
-            device=self._resolve_device(sd),
-            channels=self.config.channels,
-            dtype=self.config.dtype,
-            latency=self.config.latency,
-            extra_settings=self._extra_settings(sd),
-            callback=self._callback,
-        )
+        self._stream = sd.Stream(**self.stream_arguments(sd))
         self._stream.start()
 
     def stop(self) -> None:
