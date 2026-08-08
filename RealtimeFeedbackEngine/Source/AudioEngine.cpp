@@ -24,6 +24,8 @@ bool AudioEngine::initialise(juce::AudioDeviceManager& manager)
     juce::AudioDeviceManager::AudioDeviceSetup preferredSetup;
     preferredSetup.sampleRate = audio_config::preferredSampleRate;
     preferredSetup.bufferSize = audio_config::preferredBlockSize;
+    preferredSetup.inputDeviceName = "Focusrite USB ASIO";
+    preferredSetup.outputDeviceName = "Focusrite USB ASIO";
 
     bool asioWasAttempted = false;
     for (auto* deviceType : manager.getAvailableDeviceTypes())
@@ -32,9 +34,36 @@ bool AudioEngine::initialise(juce::AudioDeviceManager& manager)
         {
             asioWasAttempted = true;
             manager.setCurrentAudioDeviceType(deviceType->getTypeName(), true);
+            std::cout << "ASIO requested device type: " << deviceType->getTypeName() << std::endl;
             break;
         }
     }
+
+    if (! asioWasAttempted)
+    {
+        std::cerr << "ASIO initialization failed: ASIO device type is unavailable" << std::endl;
+        return false;
+    }
+
+    auto* asioType = manager.getCurrentDeviceTypeObject();
+    if (asioType != nullptr)
+    {
+        asioType->scanForDevices();
+        std::cout << "Available ASIO output devices:" << std::endl;
+        for (const auto& name : asioType->getDeviceNames(false))
+            std::cout << "    " << name << std::endl;
+
+        std::cout << "Available ASIO input devices:" << std::endl;
+        for (const auto& name : asioType->getDeviceNames(true))
+            std::cout << "    " << name << std::endl;
+    }
+
+    std::cout << "ASIO driver requested: Focusrite USB ASIO" << std::endl
+              << "Requested input device: " << preferredSetup.inputDeviceName << std::endl
+              << "Requested output device: " << preferredSetup.outputDeviceName << std::endl
+              << "Requested sample rate: " << preferredSetup.sampleRate << " Hz" << std::endl
+              << "Requested block size: " << preferredSetup.bufferSize << " samples" << std::endl
+              << "Opening ASIO device..." << std::endl;
 
     auto error = manager.initialise(audio_config::inputChannels,
                                     audio_config::outputChannels,
@@ -43,22 +72,16 @@ bool AudioEngine::initialise(juce::AudioDeviceManager& manager)
                                     {},
                                     &preferredSetup);
 
-    if (error.isNotEmpty() && asioWasAttempted)
-    {
-        std::cout << "ASIO unavailable: " << error << "\n";
-        manager.closeAudioDevice();
-        manager.setCurrentAudioDeviceType({}, true);
-        error = manager.initialise(audio_config::inputChannels,
-                                   audio_config::outputChannels,
-                                   nullptr,
-                                   true,
-                                   {},
-                                   &preferredSetup);
-    }
-
     if (error.isNotEmpty())
     {
-        std::cerr << "Audio device initialisation failed: " << error << "\n";
+        const auto failedSetup = manager.getAudioDeviceSetup();
+        std::cerr << "ASIO initialization failed" << std::endl
+                  << "ASIO error/status: " << error << std::endl
+                  << "Selected audio device type: " << manager.getCurrentAudioDeviceType() << std::endl
+                  << "Selected input device: " << failedSetup.inputDeviceName << std::endl
+                  << "Selected output device: " << failedSetup.outputDeviceName << std::endl
+                  << "Selected sample rate: " << failedSetup.sampleRate << " Hz" << std::endl
+                  << "Selected block size: " << failedSetup.bufferSize << " samples" << std::endl;
         return false;
     }
 

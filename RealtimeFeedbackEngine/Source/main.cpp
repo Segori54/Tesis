@@ -2,6 +2,17 @@
 
 #include "MainComponent.h"
 
+#include <iostream>
+
+class ConsoleLogger final : public juce::Logger
+{
+public:
+    void logMessage(const juce::String& message) override
+    {
+        std::cout << message << std::endl;
+    }
+};
+
 class RealtimeFeedbackEngineApplication final : public juce::JUCEApplication
 {
 public:
@@ -11,12 +22,16 @@ public:
 
     void initialise(const juce::String&) override
     {
+        logger = std::make_unique<ConsoleLogger>();
+        juce::Logger::setCurrentLogger(logger.get());
         mainWindow = std::make_unique<MainWindow>(getApplicationName());
     }
 
     void shutdown() override
     {
         mainWindow.reset();
+        juce::Logger::setCurrentLogger(nullptr);
+        logger.reset();
     }
 
     void systemRequestedQuit() override
@@ -44,6 +59,7 @@ private:
     };
 
     std::unique_ptr<MainWindow> mainWindow;
+    std::unique_ptr<ConsoleLogger> logger;
 };
 
 START_JUCE_APPLICATION(RealtimeFeedbackEngineApplication)
