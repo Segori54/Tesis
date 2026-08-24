@@ -5,11 +5,15 @@
 #include <JuceHeader.h>
 
 #include <iostream>
-#include <utility>
+#include <cmath>
 
-AudioEngine::AudioEngine(std::unique_ptr<IProcessor> processorToUse)
-    : processor(std::move(processorToUse))
+AudioEngine::AudioEngine(IProcessor& processorToUse) noexcept
+    : processor(processorToUse)
 {
+    for (auto& level : inputLevelsDbfs)
+        level.store(-100.0f, std::memory_order_relaxed);
+    for (auto& level : outputLevelsDbfs)
+        level.store(-100.0f, std::memory_order_relaxed);
 }
 
 AudioEngine::~AudioEngine()
@@ -17,66 +21,48 @@ AudioEngine::~AudioEngine()
     shutdown();
 }
 
-bool AudioEngine::initialise(juce::AudioDeviceManager& manager)
+bool AudioEngine::initialise(juce::AudioDeviceManager& manager,
+                             juce::String deviceType,
+                             juce::String inputDeviceName,
+                             juce::String outputDeviceName)
 {
     shutdown();
 
-    juce::AudioDeviceManager::AudioDeviceSetup preferredSetup;
-    preferredSetup.sampleRate = audio_config::preferredSampleRate;
-    preferredSetup.bufferSize = audio_config::preferredBlockSize;
-    preferredSetup.inputDeviceName = "Focusrite USB ASIO";
-    preferredSetup.outputDeviceName = "Focusrite USB ASIO";
+    currentDeviceType = "No active device";
+    currentDeviceName = "No active device";
+    currentSampleRate = 0.0;
+    currentBlockSize = 0;
+    inputLatencySamples = 0;
+    outputLatencySamples = 0;
+    statusMessage = "Opening audio device";
 
-    bool asioWasAttempted = false;
-    for (auto* deviceType : manager.getAvailableDeviceTypes())
-    {
-        if (deviceType->getTypeName().equalsIgnoreCase("ASIO"))
-        {
-            asioWasAttempted = true;
-            manager.setCurrentAudioDeviceType(deviceType->getTypeName(), true);
-            std::cout << "ASIO requested device type: " << deviceType->getTypeName() << std::endl;
-            break;
-        }
-    }
+    if (deviceType.isNotEmpty())
+        manager.setCurrentAudioDeviceType(deviceType, false);
 
-    if (! asioWasAttempted)
-    {
-        std::cerr << "ASIO initialization failed: ASIO device type is unavailable" << std::endl;
-        return false;
-    }
+    juce::AudioDeviceManager::AudioDeviceSetup selectedSetup;
+    selectedSetup.inputDeviceName = inputDeviceName;
+    selectedSetup.outputDeviceName = outputDeviceName;
+    selectedSetup.sampleRate = audio_config::preferredSampleRate;
+    selectedSetup.bufferSize = audio_config::preferredBlockSize;
 
-    auto* asioType = manager.getCurrentDeviceTypeObject();
-    if (asioType != nullptr)
-    {
-        asioType->scanForDevices();
-        std::cout << "Available ASIO output devices:" << std::endl;
-        for (const auto& name : asioType->getDeviceNames(false))
-            std::cout << "    " << name << std::endl;
+    std::cout << "Requested sample rate: " << selectedSetup.sampleRate << " Hz" << std::endl
+              << "Requested block size: " << selectedSetup.bufferSize << " samples" << std::endl
+              << "Opening audio device..." << std::endl;
 
-        std::cout << "Available ASIO input devices:" << std::endl;
-        for (const auto& name : asioType->getDeviceNames(true))
-            std::cout << "    " << name << std::endl;
-    }
-
-    std::cout << "ASIO driver requested: Focusrite USB ASIO" << std::endl
-              << "Requested input device: " << preferredSetup.inputDeviceName << std::endl
-              << "Requested output device: " << preferredSetup.outputDeviceName << std::endl
-              << "Requested sample rate: " << preferredSetup.sampleRate << " Hz" << std::endl
-              << "Requested block size: " << preferredSetup.bufferSize << " samples" << std::endl
-              << "Opening ASIO device..." << std::endl;
-
-    auto error = manager.initialise(audio_config::inputChannels,
-                                    audio_config::outputChannels,
-                                    nullptr,
-                                    true,
-                                    {},
-                                    &preferredSetup);
+    const auto error = manager.initialise(audio_config::inputChannels,
+                                          audio_config::outputChannels,
+                                          nullptr,
+                                          true,
+                                          {},
+                                          &selectedSetup);
 
     if (error.isNotEmpty())
     {
         const auto failedSetup = manager.getAudioDeviceSetup();
-        std::cerr << "ASIO initialization failed" << std::endl
-                  << "ASIO error/status: " << error << std::endl
+        currentDeviceType = manager.getCurrentAudioDeviceType();
+        statusMessage = "Audio device unavailable: " + error;
+        std::cerr << "Audio initialization failed" << std::endl
+                  << "Audio error/status: " << error << std::endl
                   << "Selected audio device type: " << manager.getCurrentAudioDeviceType() << std::endl
                   << "Selected input device: " << failedSetup.inputDeviceName << std::endl
                   << "Selected output device: " << failedSetup.outputDeviceName << std::endl
@@ -105,12 +91,12 @@ bool AudioEngine::initialise(juce::AudioDeviceManager& manager)
               << (device != nullptr ? device->getName() : juce::String("<none>")) << "\n";
     std::cout << "Available device types:\n";
 
-    for (auto* deviceType : manager.getAvailableDeviceTypes())
+    for (auto* availableType : manager.getAvailableDeviceTypes())
     {
-        deviceType->scanForDevices();
-        std::cout << "  " << deviceType->getTypeName() << "\n";
-        printDeviceNames("    Available output devices:", deviceType->getDeviceNames(false));
-        printDeviceNames("    Available input devices:", deviceType->getDeviceNames(true));
+        availableType->scanForDevices();
+        std::cout << "  " << availableType->getTypeName() << "\n";
+        printDeviceNames("    Available output devices:", availableType->getDeviceNames(false));
+        printDeviceNames("    Available input devices:", availableType->getDeviceNames(true));
     }
 
     std::cout << "Selected input device: "
@@ -128,12 +114,69 @@ bool AudioEngine::initialise(juce::AudioDeviceManager& manager)
                   << "Output latency: " << device->getOutputLatencyInSamples() << " samples\n";
     }
 
-    std::cout << "Audio device diagnostics complete. Starting audio callback.\n";
+    currentDeviceType = manager.getCurrentAudioDeviceType();
+    currentDeviceName = device != nullptr ? device->getName() : "No active device";
+    currentSampleRate = actualSetup.sampleRate;
+    currentBlockSize = actualSetup.bufferSize;
+    inputLatencySamples = device != nullptr ? device->getInputLatencyInSamples() : 0;
+    outputLatencySamples = device != nullptr ? device->getOutputLatencyInSamples() : 0;
+    statusMessage = device != nullptr ? "Audio device running" : "Audio device did not open";
+
+    std::cout << "Audio device diagnostics complete. Starting audio callback." << std::endl;
 
     manager.addAudioCallback(this);
     deviceManager = &manager;
 
     return device != nullptr;
+}
+
+juce::String AudioEngine::getCurrentDeviceType() const
+{
+    return currentDeviceType;
+}
+
+juce::String AudioEngine::getCurrentDeviceName() const
+{
+    return currentDeviceName;
+}
+
+double AudioEngine::getCurrentSampleRate() const noexcept
+{
+    return currentSampleRate;
+}
+
+int AudioEngine::getCurrentBlockSize() const noexcept
+{
+    return currentBlockSize;
+}
+
+int AudioEngine::getInputLatencySamples() const noexcept
+{
+    return inputLatencySamples;
+}
+
+int AudioEngine::getOutputLatencySamples() const noexcept
+{
+    return outputLatencySamples;
+}
+
+float AudioEngine::getInputLevelDbfs(int channel) const noexcept
+{
+    return juce::isPositiveAndBelow(channel, static_cast<int>(inputLevelsDbfs.size()))
+        ? inputLevelsDbfs[static_cast<size_t>(channel)].load(std::memory_order_relaxed)
+        : -100.0f;
+}
+
+float AudioEngine::getOutputLevelDbfs(int channel) const noexcept
+{
+    return juce::isPositiveAndBelow(channel, static_cast<int>(outputLevelsDbfs.size()))
+        ? outputLevelsDbfs[static_cast<size_t>(channel)].load(std::memory_order_relaxed)
+        : -100.0f;
+}
+
+juce::String AudioEngine::getStatusMessage() const
+{
+    return statusMessage;
 }
 
 void AudioEngine::shutdown() noexcept
@@ -155,6 +198,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChan
 {
     juce::ignoreUnused(context);
 
+    updateLevels(inputChannelData, totalNumInputChannels, numSamples, inputLevelsDbfs);
+
     // These AudioBuffer objects refer directly to device-owned callback memory.
     // The external-data constructors do not allocate; ownership remains with the device.
     juce::AudioBuffer<float> inputBuffer(const_cast<float* const*>(inputChannelData),
@@ -164,13 +209,41 @@ void AudioEngine::audioDeviceIOCallbackWithContext(const float* const* inputChan
                                           totalNumOutputChannels,
                                           numSamples);
 
-    processor->process(inputBuffer, outputBuffer);
+    processor.process(inputBuffer, outputBuffer);
+
+    updateLevels(outputChannelData, totalNumOutputChannels, numSamples, outputLevelsDbfs);
+}
+
+void AudioEngine::updateLevels(const float* const* channelData,
+                               int numChannels,
+                               int numSamples,
+                               std::array<std::atomic<float>, 32>& levels) noexcept
+{
+    for (int channel = 0; channel < static_cast<int>(levels.size()); ++channel)
+    {
+        if (channel >= numChannels || channelData == nullptr || channelData[channel] == nullptr
+            || numSamples <= 0)
+        {
+            levels[static_cast<size_t>(channel)].store(-100.0f, std::memory_order_relaxed);
+            continue;
+        }
+
+        double sumSquares = 0.0;
+        const auto* samples = channelData[channel];
+        for (int sample = 0; sample < numSamples; ++sample)
+            sumSquares += static_cast<double>(samples[sample]) * samples[sample];
+
+        const auto rms = std::sqrt(sumSquares / static_cast<double>(numSamples));
+        const auto dbfs = rms > 0.00001 ? 20.0 * std::log10(rms) : -100.0;
+        levels[static_cast<size_t>(channel)].store(static_cast<float>(dbfs),
+                                                   std::memory_order_relaxed);
+    }
 }
 
 void AudioEngine::audioDeviceAboutToStart(juce::AudioIODevice* device)
 {
     if (device != nullptr)
-        processor->prepare(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples());
+        processor.prepare(device->getCurrentSampleRate(), device->getCurrentBufferSizeSamples());
 }
 
 void AudioEngine::audioDeviceStopped()

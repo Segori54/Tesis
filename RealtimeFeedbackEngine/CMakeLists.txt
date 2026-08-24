@@ -41,6 +41,10 @@ target_sources(RealtimeFeedbackEngine PRIVATE
     Source/AudioEngine.h
     Source/AudioEngine.cpp
     Source/Processors/IProcessor.h
+    Source/Processors/DelayProcessor.h
+    Source/Processors/DelayProcessor.cpp
+    Source/Processors/NLMSProcessor.h
+    Source/Processors/NLMSProcessor.cpp
     Source/Processors/PassthroughProcessor.h
     Source/Processors/PassthroughProcessor.cpp
     Source/Config/AudioConfig.h
@@ -71,3 +75,26 @@ target_link_libraries(RealtimeFeedbackEngine PRIVATE
     juce::juce_recommended_warning_flags
     juce::juce_recommended_lto_flags
 )
+
+enable_testing()
+
+juce_add_console_app(NLMSIdentificationTest
+    PRODUCT_NAME "NLMSIdentificationTest"
+)
+
+target_sources(NLMSIdentificationTest PRIVATE
+    Tests/NLMSIdentificationTest.cpp
+    Source/Processors/IProcessor.h
+    Source/Processors/NLMSProcessor.h
+    Source/Processors/NLMSProcessor.cpp
+)
+
+target_compile_features(NLMSIdentificationTest PRIVATE cxx_std_20)
+
+target_link_libraries(NLMSIdentificationTest PRIVATE
+    juce::juce_audio_basics
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags
+)
+
+add_test(NAME NLMSIdentificationTest COMMAND NLMSIdentificationTest)
