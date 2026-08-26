@@ -1,0 +1,17 @@
+# CMake and JUCE build outputs
+/build/
+/build-*/
+/RealtimeFeedbackEngine/build/
+/RealtimeFeedbackEngine/build-*/
+
+# Local build archive and runtime logs
+/local-builds/
+/*-startup.txt
+/*-startup-error.txt
+/v*-long-stdout.txt
+/v*-long-stderr.txt
+
+# Legacy Python environments and caches
+/.venv/
+/**/__pycache__/
+*.py[cod]

@@ -1,76 +1,47 @@
-# Sistema DSP de audio en tiempo real
+# Realtime Feedback Engine
 
-Arquitectura modular para experimentar con cancelación de feedback acústico usando Python y `sounddevice`.
+Aplicación de audio en tiempo real para Windows, implementada en **C++20** con **JUCE 8.0.10**. El proyecto activo vive en [`RealtimeFeedbackEngine`](RealtimeFeedbackEngine) y reemplaza el prototipo inicial en Python, que permanece disponible únicamente en el historial de Git.
 
-## Instalación
+Actualmente incluye:
 
-```bash
-python -m pip install -r requirements.txt
+- audio full-duplex mediante JUCE, con ASIO habilitado en Windows;
+- selección de host, dispositivos de entrada y salida desde la interfaz;
+- procesamiento de passthrough y retardo ajustable para medir latencia;
+- medidores de nivel, latencia del dispositivo y estimación de latencia total;
+- una prueba de identificación para el procesador adaptativo NLMS.
+
+## Requisitos
+
+- Windows con Visual Studio Build Tools y CMake 3.22 o superior.
+- SDK oficial de Steinberg ASIO 2.3.4 incluido en `RealtimeFeedbackEngine/ThirdParty`.
+- Acceso a Internet durante la primera configuración: CMake descarga JUCE 8.0.10 mediante `FetchContent`.
+
+## Compilar y ejecutar
+
+Desde un Developer PowerShell de Visual Studio, en la raíz del repositorio:
+
+```powershell
+cmake -S RealtimeFeedbackEngine -B build -G "Visual Studio 18 2026" -A x64
+cmake --build build --config Debug --parallel 4
+& .\build\RealtimeFeedbackEngine_artefacts\Debug\RealtimeFeedbackEngine.exe
 ```
 
-## Uso
+Si se usa Visual Studio 2022, sustituye el generador por `Visual Studio 17 2022`.
 
-Passthrough, pensado para medir la latencia de la interfaz:
+La aplicación prefiere ASIO cuando está disponible. Selecciona el host y los dispositivos en la UI antes de pulsar **Run**; la interfaz muestra el sample rate, block size y latencias que el controlador reporta.
 
-```bash
-python main.py --processor passthrough --samplerate 48000 --blocksize 256 --channels 1
+## Prueba NLMS
+
+Después de configurar el proyecto, ejecuta:
+
+```powershell
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
-El passthrough no fija ningún host API. Si se especifica uno, el motor selecciona separadamente un dispositivo de entrada y uno de salida dentro del mismo Host API. Prioriza nombres que contengan `Focusrite`; si no encuentra ninguno, utiliza los dispositivos por defecto del Host API. También se puede elegir un dispositivo explícitamente:
+## Estructura
 
-```bash
-python main.py --processor passthrough --hostapi ASIO --device "Nombre del dispositivo ASIO"
-python main.py --list-devices
-```
+- `RealtimeFeedbackEngine/Source/AudioEngine.*`: callback full-duplex y configuración del dispositivo.
+- `RealtimeFeedbackEngine/Source/Processors/`: contrato `IProcessor`, delay, passthrough y NLMS.
+- `RealtimeFeedbackEngine/Tests/`: prueba de identificación NLMS.
 
-Para imprimir los dispositivos seleccionados, sus índices, samplerates y capacidades sin abrir el stream:
-
-```bash
-python main.py --inspect-devices --hostapi WASAPI
-```
-
-Para imprimir los argumentos exactos que se entregarían a `sounddevice.Stream()` y terminar sin abrirlo:
-
-```bash
-python main.py --inspect-stream --hostapi "Windows WASAPI"
-```
-
-Para probar únicamente la apertura y cierre de un duplex de dos canales, sin callback ni ajustes adicionales:
-
-```bash
-python main.py --minimal-duplex --hostapi "Windows WASAPI"
-```
-
-Para inspeccionar PortAudio sin abrir ningún stream:
-
-```bash
-python main.py --inspect-portaudio
-```
-
-Para usar otro backend de PortAudio, por ejemplo WASAPI:
-
-```bash
-python main.py --processor passthrough --hostapi WASAPI
-```
-
-La instalación de `sounddevice` debe utilizar una biblioteca PortAudio compilada con soporte ASIO para poder usar `--hostapi ASIO`.
-
-Cancelador adaptativo NLMS:
-
-```bash
-python main.py --processor nlsm --filter-length 256 --step-size 0.1
-```
-
-El dispositivo puede seleccionarse con `--device`; se acepta el índice o el nombre que reporte `sounddevice.query_devices()`.
-
-## Arquitectura
-
-- `RealtimeAudioEngine`: captura y reproducción mediante un único callback full-duplex.
-- Selección explícita y externa de host API y dispositivo; si no se indica, se utiliza el dispositivo predeterminado de PortAudio.
-- `PassthroughProcessor`: copia entrada a salida para la prueba inicial de latencia.
-- `NLSMProcessor`: cancelador adaptativo por canal con referencia de la señal enviada al altavoz.
-- `Processor`: contrato común `Process(block) -> block`.
-
-Para sustituir el procesador no se modifica el motor: basta construir otro objeto que implemente `Process(block)`. Un futuro modelo de Deep Learning puede implementar la misma clase base, mantener su estado en el constructor y realizar inferencia por bloques.
-
-El callback ya expone `callback_count` y `callback_overruns` en el motor. Son puntos iniciales para agregar mediciones de tiempo de ejecución, carga relativa al período de bloque, latencia y estadísticas de underrun/overrun sin mezclar instrumentación con los procesadores.
+Los directorios de compilación, cachés, logs y `local-builds/` son artefactos locales y no se versionan. Las compilaciones históricas preservadas se registran localmente dentro de `local-builds/`.
